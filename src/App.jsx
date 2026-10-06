@@ -6,7 +6,7 @@ import {
 } from "recharts";
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "firebase/auth";
-import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
+import { getFirestore, getDocs, collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
 import { getDoc } from "firebase/firestore";
 
 // ==========================================
@@ -406,8 +406,27 @@ export default function App() {
   const fileInputRef = useRef(null);
   const reportRef = useRef(null);
 
+// 🌟 1. 一次性獲取學生數據函數
+const fetchStudentsData = async () => {
+try {
+const querySnapshot = await getDocs(collection(db, "students"));
+const loaded = querySnapshot.docs
+.map(doc => doc.data())
+.filter(doc => doc.id !== "SYSTEM_CONFIG_QUESTS"); // 過濾非學生文件
+setStudents(loaded);
+} catch (error) {
+console.error("獲取學生數據失敗:", error);
+}
+};
 
-  // 1. 依照安全限制進行雲端帳號登入
+// 🌟 2. 僅在教師登入成功或點擊刷新時觸發一次
+useEffect(() => {
+if (teacherAuthenticated) {
+fetchStudentsData();
+}
+}, [teacherAuthenticated]);
+
+  // 1. 依照安全限制進行雲端帳號登入（已修正連線狀態燈卡燈閃爍問題）
   useEffect(() => {
     const initAuth = async () => {
       setDbStatus("connecting");
@@ -419,13 +438,16 @@ export default function App() {
           const credential = await signInAnonymously(auth);
           setDbUser(credential.user);
         }
-        setDbStatus("connected");
+        // 🌟 核心修正點：確保一次性匿名驗證成功後，立即將狀態切換為已連線
+        setDbStatus("connected"); 
+        setDbErrorMessage("");
       } catch (err) {
         console.error("Firebase 驗證初始化失敗，嘗試匿名後備:", err);
         try {
           const credential = await signInAnonymously(auth);
           setDbUser(credential.user);
-          setDbStatus("connected");
+          setDbStatus("connected"); // 🌟 核心修正點
+          setDbErrorMessage("");
         } catch (e2) {
           setDbStatus("error");
           setDbErrorMessage(`驗證登入失敗: ${err.message}`);
@@ -437,7 +459,7 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setDbUser(user);
-        setDbStatus("connected");
+        setDbStatus("connected"); // 🌟 狀態安全同步
       } else {
         setDbUser(null);
       }
@@ -445,30 +467,12 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. 當驗證通過時，直接且純淨地對接並監聽最外層 `/students` 與 `/teachers` 集合
-  //    另外同步監聽特別用來儲存每週任務的通用設定文件 SYSTEM_CONFIG_QUESTS
-  useEffect(() => {
-    if (!dbUser) return;
-    
-    setDbStatus("connecting");
-    setDbErrorMessage("");
-
-    // (A) 實時監聽 學生資料
-    const studentsRef = getStudentsRef();
-    const unsubscribeStudents = onSnapshot(studentsRef, (snapshot) => {
-      const loaded = snapshot.docs
-        .map(doc => doc.data())
-        // 過濾掉系統配置等特殊文件，只保留純學生資料
-        .filter(doc => doc.id !== "SYSTEM_CONFIG_QUESTS");
-      setStudents(loaded);
-      setDbStatus("connected");
-      setDbErrorMessage("");
-    }, (error) => {
-      console.error("Firestore 學生連線失敗:", error);
-      setDbStatus("error");
-      setDbErrorMessage(`無法讀取最外層 /students 集合（原因：${error.message}）。\n💡 請確認您已於 Firebase 控制台「建立 Firestore 資料庫」，並設定規格發布為 allow read, write: if true;`);
-    });
-
+// 2. 當驗證通過時，監聽任務配置與教師帳號
+useEffect(() => {
+if (!dbUser) return;
+setDbStatus("connecting");
+setDbErrorMessage("");
+   
     // (B) 實時監聽 全球任務配置 SYSTEM_CONFIG_QUESTS 專屬文件 (包含版本資訊)
     const questConfigRef = doc(db, 'students', 'SYSTEM_CONFIG_QUESTS');
     const unsubscribeQuests = onSnapshot(questConfigRef, (docSnap) => {
@@ -481,6 +485,7 @@ export default function App() {
             setCurrentQuestsVersion(data.version);
           }
         }
+         setDbStatus("connected"); 
       } else {
         // 若雲端尚未有此配置，則寫入預設任務與初始版本
         const initialVersion = String(Date.now());
@@ -507,7 +512,6 @@ const unsubscribeTeachers = onSnapshot(teachersRef, (snapshot) => {
 
 
     return () => {
-      unsubscribeStudents();
       unsubscribeQuests();
       unsubscribeTeachers();
     };
@@ -673,21 +677,58 @@ const unsubscribeTeachers = onSnapshot(teachersRef, (snapshot) => {
     setStudentLoginData((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleStudentLogin = () => {
-    const found = findStudent(studentLoginData.className, studentLoginData.studentId);
+// 🌟 修改後的學生獨立認證登入（直接向雲端精準請求單一文件，免等老師登入）
+  const handleStudentLogin = async () => {
     if (!studentLoginData.className || !studentLoginData.studentId || !studentLoginData.password) {
-      setLoginError("請輸入完整的班級、學號及密碼！"); return;
+      setLoginError("請輸入完整的班級、學號及密碼！"); 
+      return;
     }
-    if (!found) {
-      setLoginError("查無此學生，或伺服器尚未同步資料。"); return;
-    }
-    if (getSafeString(found.password).trim() !== getSafeString(studentLoginData.password).trim()) {
-      setLoginError("密碼不正確，請重新輸入。"); return;
-    }
+
     setLoginError("");
-    setStudentAuthenticated(true);
-    setStudentActiveTab("manual"); // 預設進入"我的修煉手冊"
-    setAiCoachResponse(found.aiAdvice || "");
+    setDbStatus("connecting"); // 顯示讀取中狀態
+
+    try {
+      // 1. 直接定位到該學生在雲端的單一 Doc 參照
+      const studentDocRef = getStudentDocRef(studentLoginData.className, studentLoginData.studentId);
+      const docSnap = await getDoc(studentDocRef);
+
+      // 2. 檢查雲端有沒有這份文件
+      if (!docSnap.exists()) {
+        setLoginError("查無此學生，或伺服器尚未同步資料。");
+        setDbStatus("connected");
+        return;
+      }
+
+      const foundStudent = docSnap.data();
+
+      // 3. 安全比對密碼
+      if (getSafeString(foundStudent.password).trim() !== getSafeString(studentLoginData.password).trim()) {
+        setLoginError("密碼不正確，請重新輸入。");
+        setDbStatus("connected");
+        return;
+      }
+
+      // 4. 驗證成功，將此學生的最新資料寫入當前在線狀態
+      setLoginError("");
+      setStudentAuthenticated(true);
+      setStudentActiveTab("manual"); // 預設進入"我的修煉手冊"
+      setAiCoachResponse(foundStudent.aiAdvice || "");
+
+      // 5. 🌟 關鍵補位：為了讓排行榜、Top 5 運算不報錯，把當前學生的資料塞進學生的 local 陣列中
+      setStudents(prev => {
+        const filtered = prev.filter(s => 
+          !(getSafeString(s.className).toUpperCase() === getSafeString(foundStudent.className).toUpperCase() && 
+            getSafeString(s.id) === getSafeString(foundStudent.id))
+        );
+        return [...filtered, foundStudent];
+      });
+
+      setDbStatus("connected");
+    } catch (err) {
+      console.error("學生登入雲端查詢失敗:", err);
+      setLoginError("系統連線失敗，請稍後再試。");
+      setDbStatus("error");
+    }
   };
 
   const handleTeacherLogin = async () => {
