@@ -63,24 +63,13 @@ const emptyFitness = { cardio: 60, strength: 60, power: 60, speed: 60, flexibili
 // ==========================================
 // 🛡️ 超級安全數據防禦與清洗轉換器
 // ==========================================
-const getSafeString = (val) => {
-  if (val === null || val === undefined) return "";
-  return String(val);
-};
-
+const getSafeString = (val) => (val === null || val === undefined ? "" : String(val));
 const getSafeNumber = (val) => {
   const num = Number(val);
   return isNaN(num) ? 0 : num;
 };
-
-const cleanCell = (cell) => {
-  if (cell === null || cell === undefined) return "";
-  return String(cell).trim().replace(/^["']|["']$/g, "").trim();
-};
-
-const getYearFromClass = (className = "") => {
-  return getSafeString(className).slice(0, 2);
-};
+const cleanCell = (cell) => (cell === null || cell === undefined ? "" : String(cell).trim().replace(/^["']|["']$/g, "").trim());
+const getYearFromClass = (className = "") => getSafeString(className).slice(0, 2);
 
 const latestRecord = (student) => {
   if (student && Array.isArray(student.scores) && student.scores.length > 0) {
@@ -88,12 +77,10 @@ const latestRecord = (student) => {
   }
   return null;
 };
-
 const latestScore = (student) => {
   const record = latestRecord(student);
   return record ? getSafeNumber(record.average) : 0;
 };
-
 const progressScore = (student) => {
   if (!student || !Array.isArray(student.scores) || student.scores.length < 2) return 0;
   const lastAvg = getSafeNumber(student.scores[student.scores.length - 1]?.average);
@@ -408,23 +395,36 @@ export default function App() {
 
 // 🌟 1. 一次性獲取學生數據函數
 const fetchStudentsData = async () => {
-try {
-const querySnapshot = await getDocs(collection(db, "students"));
-const loaded = querySnapshot.docs
-.map(doc => doc.data())
-.filter(doc => doc.id !== "SYSTEM_CONFIG_QUESTS"); // 過濾非學生文件
-setStudents(loaded);
-} catch (error) {
-console.error("獲取學生數據失敗:", error);
-}
+  try {
+    const querySnapshot = await getDocs(collection(db, "students"));
+    const loaded = querySnapshot.docs
+      .map(doc => doc.data())
+      .filter(doc => doc.id !== "SYSTEM_CONFIG_QUESTS"); // 過濾非學生文件
+    setStudents(loaded);
+  } catch (error) {
+    console.error("獲取學生數據失敗:", error);
+  }
 };
 
-// 🌟 2. 僅在教師登入成功或點擊刷新時觸發一次
+// 🌟 2. 智慧型大數據安全鎖：確保排名與教師端有足夠的資料，同時限制重複讀取
 useEffect(() => {
-if (teacherAuthenticated) {
-fetchStudentsData();
-}
+  // 狀況 A：當教師成功認證登入，且發現本地的學生資料不足（少於 2 人，代表之前只有單一學生登入過或全空）
+  // 必須立刻補全資料，否則教師會看到空列表，也無法審核。
+  if (teacherAuthenticated && students.length <= 1) {
+    fetchStudentsData();
+  }
 }, [teacherAuthenticated]);
+
+useEffect(() => {
+  // 狀況 B：當學生成功登入，如果發現本地還沒有其他同學的資料（長度 <= 1）
+  // 則「只在學生切換到需要排名的首頁（manual）時」才去下載完整資料。
+  // 這樣如果學生只是上線提交任務就走，完全不會觸發下載，省下大量讀取次數！
+  if (studentAuthenticated && studentActiveTab === "manual" && students.length <= 1) {
+    fetchStudentsData();
+  }
+}, [studentAuthenticated, studentActiveTab]);
+
+
 
   // 1. 依照安全限制進行雲端帳號登入（已修正連線狀態燈卡燈閃爍問題）
   useEffect(() => {
@@ -869,13 +869,24 @@ const unsubscribeTeachers = onSnapshot(teachersRef, (snapshot) => {
       submittedAt: new Date().toLocaleDateString(),
       approvedAt: "",
       status: "pending", // pending, approved, rejected
-      version: currentQuestsVersion // 🆕 寫入目前發布的版本標籤，用作重置比對
+      version: currentQuestsVersion 
     };
 
     const updatedQuests = [
       ...(Array.isArray(currentLoggedInStudent.questsSubmitted) ? currentLoggedInStudent.questsSubmitted : []),
       newSubmission
     ];
+
+    // 🌟【即時優化】先將本地的任務狀態改為「已提交，等待審核」，讓 UI 馬上轉變，防止重複填寫
+    setStudents(prevStudents => 
+      prevStudents.map(s => 
+        (getSafeString(s.className).toUpperCase() === getSafeString(currentLoggedInStudent.className).toUpperCase() && getSafeString(s.id) === getSafeString(currentLoggedInStudent.id))
+          ? { ...s, questsSubmitted: updatedQuests }
+          : s
+      )
+    );
+
+    setLogModalOpen(false); // 立即關閉 Modal
 
     try {
       const docRef = getStudentDocRef(currentLoggedInStudent.className, currentLoggedInStudent.id);
@@ -884,14 +895,23 @@ const unsubscribeTeachers = onSnapshot(teachersRef, (snapshot) => {
         questsSubmitted: updatedQuests
       }, { merge: true }));
 
-      setLogModalOpen(false);
       setImportMessage(`🎉 成功提交「${activeQuestForLog.title}」日誌！請等待體育老師在審核大廳核准。`);
       setTimeout(() => setImportMessage(""), 5000);
     } catch (err) {
       console.error("提交日誌失敗:", err);
       setImportMessage(`❌ 提交失敗: ${err.message}`);
+      
+      // 【回滾機制】若雲端寫入失敗，則將本地狀態復原
+      setStudents(prevStudents => 
+        prevStudents.map(s => 
+          (getSafeString(s.className).toUpperCase() === getSafeString(currentLoggedInStudent.className).toUpperCase() && getSafeString(s.id) === getSafeString(currentLoggedInStudent.id))
+            ? { ...s, questsSubmitted: currentLoggedInStudent.questsSubmitted }
+            : s
+        )
+      );
     }
   };
+
 
   // ==========================================
   // 🆕 升級：教師端審核大廳核心決策邏輯
@@ -925,7 +945,7 @@ const unsubscribeTeachers = onSnapshot(teachersRef, (snapshot) => {
     const student = sub.studentObj;
     if (!student) return;
 
-    // 更新任務狀態
+    // 建立更新後的資料結構
     const updatedSubmitted = student.questsSubmitted.map(q => {
       if (q.id === sub.id) {
         return {
@@ -937,8 +957,16 @@ const unsubscribeTeachers = onSnapshot(teachersRef, (snapshot) => {
       return q;
     });
 
-    // 如果同意，則立即增加 XP
     const newXp = approved ? getSafeNumber(student.xp) + getSafeNumber(sub.xp) : getSafeNumber(student.xp);
+
+    // 🌟【即時優化】立即在前端將該學生的資料更新，這會同步觸發 pendingSubmissions 的重新計算，使任務框架即時消失/更新
+    setStudents(prevStudents => 
+      prevStudents.map(s => 
+        (getSafeString(s.className).toUpperCase() === getSafeString(student.className).toUpperCase() && getSafeString(s.id) === getSafeString(student.id))
+          ? { ...s, xp: newXp, questsSubmitted: updatedSubmitted }
+          : s
+      )
+    );
 
     try {
       const docRef = getStudentDocRef(student.className, student.id);
@@ -956,8 +984,18 @@ const unsubscribeTeachers = onSnapshot(teachersRef, (snapshot) => {
     } catch (err) {
       console.error("審核寫入失敗:", err);
       setImportMessage(`❌ 審核處理失敗: ${err.message}`);
+
+      // 【回滾機制】若雲端失敗，還原學生本地狀態
+      setStudents(prevStudents => 
+        prevStudents.map(s => 
+          (getSafeString(s.className).toUpperCase() === getSafeString(student.className).toUpperCase() && getSafeString(s.id) === getSafeString(student.id))
+            ? { ...s, xp: student.xp, questsSubmitted: student.questsSubmitted }
+            : s
+        )
+      );
     }
   };
+
 
   // ==========================================
   // 🆕 升級：教師發布與同步更新每週任務 (寫入全新 version 時間戳記，覆寫重置學生狀態)
