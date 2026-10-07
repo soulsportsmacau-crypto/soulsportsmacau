@@ -408,21 +408,16 @@ const fetchStudentsData = async () => {
 
 // 🌟 2. 智慧型大數據安全鎖：確保排名與教師端有足夠的資料，同時限制重複讀取
 useEffect(() => {
-  // 狀況 A：當教師成功認證登入，且發現本地的學生資料不足（少於 2 人，代表之前只有單一學生登入過或全空）
-  // 必須立刻補全資料，否則教師會看到空列表，也無法審核。
-  if (teacherAuthenticated && students.length <= 1) {
-    fetchStudentsData();
+  if (teacherAuthenticated) {
+    fetchStudentsData(); // 只在老師登入成功的那刻「只抓一次」全校名單
   }
 }, [teacherAuthenticated]);
 
 useEffect(() => {
-  // 狀況 B：當學生成功登入，如果發現本地還沒有其他同學的資料（長度 <= 1）
-  // 則「只在學生切換到需要排名的首頁（manual）時」才去下載完整資料。
-  // 這樣如果學生只是上線提交任務就走，完全不會觸發下載，省下大量讀取次數！
-  if (studentAuthenticated && studentActiveTab === "manual" && students.length <= 1) {
-    fetchStudentsData();
+  if (studentAuthenticated) {
+    fetchStudentsData(); // 學生登入成功時一次性加載排行榜需要的基礎資料即可
   }
-}, [studentAuthenticated, studentActiveTab]);
+}, [studentAuthenticated]);
 
 
 
