@@ -398,8 +398,15 @@ const fetchStudentsData = async () => {
   try {
     const querySnapshot = await getDocs(collection(db, "students"));
     const loaded = querySnapshot.docs
-      .map(doc => doc.data())
-      .filter(doc => doc.id !== "SYSTEM_CONFIG_QUESTS"); // 過濾非學生文件
+      .map(doc => {
+        const data = doc.data();
+        // 🔒 緊急安全止血：在存入前端記憶體前，強行將密碼欄位擦除
+        if (data.password) {
+          data.password = "PROTECTED_BY_SYSTEM"; 
+        }
+        return data;
+      })
+      .filter(doc => doc.id !== "SYSTEM_CONFIG_QUESTS");
     setStudents(loaded);
   } catch (error) {
     console.error("獲取學生數據失敗:", error);
@@ -492,19 +499,6 @@ setDbErrorMessage("");
           .catch(err => console.error("無法初始化雲端任務:", err));
       }
     });
-
-    // (C) 實時監聽 教師帳號（安全限制版：只獲取已啟用教師，不進行自動寫入）
-const teachersRef = getTeachersRef();
-const unsubscribeTeachers = onSnapshot(teachersRef, (snapshot) => {
-  const loaded = snapshot.docs.map(doc => doc.data());
-  
-  // 🛡️ 安全修正：完全移除 if (loaded.length === 0) 的自動寫入邏輯
-  // 僅保留將雲端資料同步到前端 State 的功能，供管理員介面顯示表格使用
-  setTeacherAccounts(loaded);
-}, (error) => {
-  console.error("Firestore 教師帳號連線中斷:", error);
-});
-
 
     return () => {
       unsubscribeQuests();
