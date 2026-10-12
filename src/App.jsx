@@ -370,7 +370,8 @@ export default function App() {
   const [teacherLogin, setTeacherLogin] = useState({ username: "", password: "" });
   const [teacherError, setTeacherError] = useState("");
   
-  const [newTeacher, setNewTeacher] = useState({ name: "", username: "", password: "", classes: "", role: "teacher" });
+   // 🔹 修改點：初始化新教師狀態時加入任務派發授權欄位
+  const [newTeacher, setNewTeacher] = useState({ name: "", username: "", password: "", classes: "", role: "teacher", canPublishQuests: false });
 
   const [selectedRankingClass, setSelectedRankingClass] = useState("全部");
   const [selectedRankingYear, setSelectedRankingYear] = useState("全部");
@@ -990,12 +991,17 @@ setDbErrorMessage("");
   // 🆕 升級：教師發布與同步更新每週任務 (寫入全新 version 時間戳記，覆寫重置學生狀態)
   // ==========================================
   const handleUpdateWeeklyQuests = async () => {
-    if (currentTeacher?.role !== "admin" && currentTeacher?.role !== "teacher") {
-      setImportMessage("🚫 權限不足！只有教師和管理員可以派發每週體能任務。");
+    // 🔹 修改點：精確權限攔截，必須是管理員，或是經管理員授權勾選(canPublishQuests為true)的老師才可以派發
+    const isAdmin = currentTeacher?.role === "admin";
+    const isAuthorizedTeacher = currentTeacher?.role === "teacher" && currentTeacher?.canPublishQuests === true;
+
+    if (!isAdmin && !isAuthorizedTeacher) {
+      setImportMessage("🚫 權限不足！管理員尚未授權您發布或修改每週體能任務。如有需要請聯繫管理員。");
       return;
     }
 
     try {
+
       const newVersion = String(Date.now()); // 🆕 每當發放新任務時自動產生全新的版本標籤
       const questConfigRef = doc(db, 'students', 'SYSTEM_CONFIG_QUESTS');
       await withTimeout(8000, setDoc(questConfigRef, { 
@@ -1193,7 +1199,7 @@ setDbErrorMessage("");
       return;
     }
 
-    try {
+        try {
       const docRef = getTeacherDocRef(newTeacher.username.trim());
       await setDoc(docRef, {
         username: newTeacher.username.trim(),
@@ -1201,9 +1207,13 @@ setDbErrorMessage("");
         password: newTeacher.password.trim(),
         classes: newTeacher.classes.trim().toUpperCase(), 
         role: "teacher",
-        active: true
+        active: true,
+        // 🔹 插入這行：將打勾的狀態（true/false）同步寫入 Firebase 雲端
+        canPublishQuests: newTeacher.canPublishQuests || false
       });
-      setNewTeacher({ name: "", username: "", password: "", classes: "", role: "teacher" });
+      
+      // 🔹 修改這行：建立成功後，將輸入表單重置，並將打勾預設恢復為 false
+      setNewTeacher({ name: "", username: "", password: "", classes: "", role: "teacher", canPublishQuests: false });
       setTeacherError("");
       setImportMessage("✅ 教師帳號新增成功，並已同步至雲端資料庫！");
     } catch (err) {
@@ -2564,6 +2574,18 @@ setDbErrorMessage("");
                               <label className="block text-xxs text-slate-400 mb-1">授權任教班級 (逗號隔開)</label>
                               <input type="text" placeholder="如：F1A,F1B,F2C" value={newTeacher.classes} onChange={(e) => setNewTeacher(p => ({...p, classes: e.target.value}))} className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-100 outline-none focus:border-indigo-500" />
                             </div>
+                            {/* 🔹 插入空格與授權打勾欄位 */}
+                            <div className="flex items-center h-full pt-5 pl-2">
+                              <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300 font-bold">
+                                <input 
+                                  type="checkbox" 
+                                  checked={newTeacher.canPublishQuests} 
+                                  onChange={(e) => setNewTeacher(p => ({...p, canPublishQuests: e.target.checked}))}
+                                  className="w-4 h-4 rounded border-slate-800 bg-slate-950 text-indigo-600 focus:ring-indigo-500" 
+                                />
+                                <span>授權發布體能任務</span>
+                              </label>
+                            </div>
                           </div>
                           
                           {teacherError && <p className="text-xs text-rose-400 font-bold">⚠️ {teacherError}</p>}
@@ -2606,6 +2628,28 @@ setDbErrorMessage("");
                                         ))}
                                         {(!t.classes) && <span className="text-xxs text-rose-500 italic">尚未配置班級</span>}
                                       </div>
+                                    )}
+                                  </td>
+                                   {/* 🔹 插入空格欄位內容：打勾開關，管理員可隨時點擊實時同步雲端 */}
+                                  <td className="p-3 text-center">
+                                    {t.role === 'admin' ? (
+                                      <span className="text-xxs text-amber-400 font-bold">🔒 自動授權</span>
+                                    ) : (
+                                      <input 
+                                        type="checkbox" 
+                                        checked={t.canPublishQuests || false} 
+                                        onChange={async (e) => {
+                                          try {
+                                            const docRef = doc(db, 'teachers', t.username);
+                                            await setDoc(docRef, { canPublishQuests: e.target.checked }, { merge: true });
+                                            setImportMessage(`✅ 已成功更新 ${t.name} 老師的體能任務派發授權狀態！`);
+                                            setTimeout(() => setImportMessage(""), 3000);
+                                          } catch(err) {
+                                            setImportMessage(`❌ 授權更新失敗：${err.message}`);
+                                          }
+                                        }}
+                                        className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                      />
                                     )}
                                   </td>
                                   <td className="p-3">
