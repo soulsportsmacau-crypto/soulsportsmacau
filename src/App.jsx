@@ -503,9 +503,9 @@ setDbErrorMessage("");
 
     return () => {
       unsubscribeQuests();
-      unsubscribeTeachers();
     };
   }, [dbUser]);
+
 
   // ==========================================
   // 🔑 細粒度權限：當前登入教師的「授權任教班級」邏輯
@@ -858,7 +858,7 @@ setDbErrorMessage("");
       reflection: combinedFeedback,
       submittedAt: new Date().toLocaleDateString(),
       approvedAt: "",
-      status: "pending", // pending, approved, rejected
+      status: "pending", 
       version: currentQuestsVersion 
     };
 
@@ -867,21 +867,28 @@ setDbErrorMessage("");
       newSubmission
     ];
 
-    // 🌟【即時優化】先將本地的任務狀態改為「已提交，等待審核」，讓 UI 馬上轉變，防止重複填寫
+    // 🔹 修改點 1：前端即時優化更新時，順便把 password 屬性完全移除 (delete)，防止前端狀態鏈帶有密碼欄位
     setStudents(prevStudents => 
-      prevStudents.map(s => 
-        (getSafeString(s.className).toUpperCase() === getSafeString(currentLoggedInStudent.className).toUpperCase() && getSafeString(s.id) === getSafeString(currentLoggedInStudent.id))
-          ? { ...s, questsSubmitted: updatedQuests }
-          : s
-      )
+      prevStudents.map(s => {
+        if (getSafeString(s.className).toUpperCase() === getSafeString(currentLoggedInStudent.className).toUpperCase() && getSafeString(s.id) === getSafeString(currentLoggedInStudent.id)) {
+          const { password, ...cleanS } = s; // 徹底剝離
+          return { ...cleanS, questsSubmitted: updatedQuests };
+        }
+        return s;
+      })
     );
 
-    setLogModalOpen(false); // 立即關閉 Modal
+    setLogModalOpen(false); 
 
     try {
       const docRef = getStudentDocRef(currentLoggedInStudent.className, currentLoggedInStudent.id);
+      
+      // 🔹 修改點 2：雲端寫入前，同樣實施最嚴格的解構剝離
+      const { password, ...studentDataWithoutPassword } = currentLoggedInStudent;
+
+      // 🔹 修改點 3：只傳送完全沒有 password 欄位的乾淨物件
       await withTimeout(8000, setDoc(docRef, {
-        ...currentLoggedInStudent,
+        ...studentDataWithoutPassword,
         questsSubmitted: updatedQuests
       }, { merge: true }));
 
@@ -891,13 +898,14 @@ setDbErrorMessage("");
       console.error("提交日誌失敗:", err);
       setImportMessage(`❌ 提交失敗: ${err.message}`);
       
-      // 【回滾機制】若雲端寫入失敗，則將本地狀態復原
       setStudents(prevStudents => 
-        prevStudents.map(s => 
-          (getSafeString(s.className).toUpperCase() === getSafeString(currentLoggedInStudent.className).toUpperCase() && getSafeString(s.id) === getSafeString(currentLoggedInStudent.id))
-            ? { ...s, questsSubmitted: currentLoggedInStudent.questsSubmitted }
-            : s
-        )
+        prevStudents.map(s => {
+          if (getSafeString(s.className).toUpperCase() === getSafeString(currentLoggedInStudent.className).toUpperCase() && getSafeString(s.id) === getSafeString(currentLoggedInStudent.id)) {
+            const { password, ...cleanS } = s;
+            return { ...cleanS, questsSubmitted: currentLoggedInStudent.questsSubmitted };
+          }
+          return s;
+        })
       );
     }
   };
@@ -960,8 +968,11 @@ setDbErrorMessage("");
 
     try {
       const docRef = getStudentDocRef(student.className, student.id);
+     // 🔹 修改點：剝離假密碼，防止老師在審核任務時誤將假密碼寫入雲端
+      const { password, ...studentDataWithoutPassword } = student;
+
       await withTimeout(8000, setDoc(docRef, {
-        ...student,
+        ...studentDataWithoutPassword,
         xp: newXp,
         questsSubmitted: updatedSubmitted
       }, { merge: true }));
@@ -1116,8 +1127,11 @@ setDbErrorMessage("");
     
     try {
       const docRef = getStudentDocRef(student.className, student.id);
-      await withTimeout(8000, setDoc(docRef, {
-        ...student,
+       // 🔹 修改點：安全剝離，將已被安全遮罩的密碼欄位剔除，防止覆寫雲端真實密碼
+      const { password, ...studentDataWithoutPassword } = student;
+
+        await withTimeout(8000, setDoc(docRef, {
+        ...studentDataWithoutPassword, // 🔹 使用剝離密碼後的乾淨數據
         xp: Number(editScoreData.xp),
         scores: [...(Array.isArray(student.scores) ? student.scores : []), newScore]
       }, { merge: true }));
@@ -1128,7 +1142,7 @@ setDbErrorMessage("");
     }
   };
 
-  const handleDeleteStudent = (student) => {
+   const handleDeleteStudent = (student) => {
     if (currentTeacher?.role !== 'admin' && !authorizedClasses.includes(getSafeString(student.className).trim().toUpperCase())) {
       setImportMessage("🚫 權限不足！您未被授權刪除此班級學生。");
       return;
@@ -1150,9 +1164,10 @@ setDbErrorMessage("");
             setModalConfig({ isOpen: false });
           }
         }
-      }
-    });
+      } 
+    }); 
   };
+
 
   const handleDeleteAllStudents = () => {
     if (currentTeacher?.role !== "admin") {
@@ -1199,20 +1214,25 @@ setDbErrorMessage("");
       return;
     }
 
-        try {
+    try {
       const docRef = getTeacherDocRef(newTeacher.username.trim());
-      await setDoc(docRef, {
+      
+      // 🔹 建立要儲存的教師資料物件
+      const teacherData = {
         username: newTeacher.username.trim(),
         name: newTeacher.name.trim(),
         password: newTeacher.password.trim(),
         classes: newTeacher.classes.trim().toUpperCase(), 
         role: "teacher",
         active: true,
-        // 🔹 插入這行：將打勾的狀態（true/false）同步寫入 Firebase 雲端
         canPublishQuests: newTeacher.canPublishQuests || false
-      });
+      };
+
+      await setDoc(docRef, teacherData);
       
-      // 🔹 修改這行：建立成功後，將輸入表單重置，並將打勾預設恢復為 false
+      // 🔹 修改點：雲端成功後，立刻同步更新前端本地陣列，讓畫面瞬間「看得到新老師」！
+      setTeacherAccounts(prev => [...prev, teacherData]);
+
       setNewTeacher({ name: "", username: "", password: "", classes: "", role: "teacher", canPublishQuests: false });
       setTeacherError("");
       setImportMessage("✅ 教師帳號新增成功，並已同步至雲端資料庫！");
@@ -1220,6 +1240,7 @@ setDbErrorMessage("");
       setTeacherError(`❌ 儲存至雲端失敗：${err.message}`);
     }
   };
+
 
   const handleDeleteTeacher = async (targetUsername) => {
     if (currentTeacher?.role !== "admin") {
@@ -1459,7 +1480,11 @@ setDbErrorMessage("");
       // 同步寫入 Firebase 雲端資料庫以永久保存修煉成果
       try {
         const docRef = getStudentDocRef(currentLoggedInStudent.className, currentLoggedInStudent.id);
-        await setDoc(docRef, { ...currentLoggedInStudent, aiAdvice: adviceText }, { merge: true });
+        
+        // 🔹 修改點：安全剝離，避免同步 AI 指南時覆寫學生雲端密碼
+        const { password, ...studentDataWithoutPassword } = currentLoggedInStudent;
+
+        await setDoc(docRef, { ...studentDataWithoutPassword, aiAdvice: adviceText }, { merge: true });
       } catch (err) {
         console.warn("同步本地 AI 建議至雲端失敗：", err);
       }
