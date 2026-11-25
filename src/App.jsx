@@ -1332,7 +1332,7 @@ setDbErrorMessage("");
       setImportMessage(`❌ 成績儲存失敗：${err.message}`);
     }
   };
-// 🔹 升級點 3：運動裝備庫專用——雲端安全防刷購買決策函數（只扣金幣，不影響總XP與等級）
+// 🔹 升級點 3：神秘裝備庫專用——雲端安全防刷購買決策函數（只扣金幣，不影響總XP與等級）
   const handleBuyItem = async (item) => {
     if (!currentLoggedInStudent) return;
     
@@ -2430,13 +2430,13 @@ setDbErrorMessage("");
                         setTimeout(() => setImportMessage(""), 7000);
                         return;
                       }
-                      setStudentActiveTab("tbd"
+                      setStudentActiveTab("tbd");
                     }} 
                     className={`flex-1 text-center py-3.5 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 relative ${
                       studentActiveTab === "tbd" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/10" : "text-slate-400 hover:text-slate-200"
                     } ${currentLevel < 10 ? "opacity-40 cursor-not-allowed" : ""}`}
                   >
-                    <span>{currentLevel < 10 ? "🔒 運動裝備庫 (Lv.10解鎖)" : "🔮 運動裝備庫"}</span>
+                    <span>{currentLevel < 10 ? "🔒 神秘裝備庫 (Lv.10解鎖)" : "🔮 神秘裝備庫"}</span>
                   </button>
                 </div>
               )}
@@ -2753,7 +2753,7 @@ setDbErrorMessage("");
               )}
 
               {/* ==========================================
-                  分頁 4：⚔️ 聖保祿運動體能裝備庫 (正式 10款 3D自轉商店版)
+                  分頁 4：⚔️ 聖保祿神秘體能裝備庫 (正式 10款 3D自轉商店版)
                   ========================================== */}
               {studentAuthenticated && studentActiveTab === "tbd" && (
                 <div className="space-y-6 animate-fadeIn">
